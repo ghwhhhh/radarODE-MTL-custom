@@ -9,12 +9,14 @@ from LibMTL.config import LibMTL_args, prepare_args
 from LibMTL.utils import set_random_seed, set_device
 from LibMTL.model import resnet_dilated
 from LibMTL import Trainer
-from utils.utils import shapeMetric, shapeLoss, ppiMetric, ppiLoss, anchorMetric, anchorLoss
+import LibMTL.weighting as weighting_method
+import LibMTL.architecture as architecture_method
+from Projects.radarODE_plus.utils.utils import shapeMetric, shapeLoss, ppiMetric, ppiLoss, anchorMetric, anchorLoss
 
-from spectrum_dataset import dataset_concat
-from nets.PPI_decoder import PPI_decoder
-from nets.anchor_decoder import anchor_decoder
-from nets.model import backbone, shapeDecoder
+from Projects.radarODE_plus.spectrum_dataset import dataset_concat
+from Projects.radarODE_plus.nets.PPI_decoder import PPI_decoder
+from Projects.radarODE_plus.nets.anchor_decoder import anchor_decoder
+from Projects.radarODE_plus.nets.model import backbone, shapeDecoder
 from LibMTL.config import prepare_args
 import argparse
 
@@ -33,13 +35,17 @@ def parse_args(parser):
     parser.add_argument('--select_sample', default=False,
                         type=bool, help='select sample')
     parser.add_argument('--aug_snr', default=100, type=int, help='100 for no aug otherwise the SNR')
+    parser.add_argument('--num_workers', default=0 if os.name == 'nt' else 8, type=int,
+                        help='dataloader worker count')
+    parser.add_argument('--test_interval', default=1, type=int,
+                        help='run test every N epochs')
     return parser.parse_args()
 
 
 def main(params):
     kwargs, optim_param, scheduler_param = prepare_args(params)
-    ID_all = np.arange(1, 89)
-    ID_test = np.array([75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85])
+    ID_all = np.arange(1, 11)  # Use half of current subset for faster iteration
+    ID_test = np.array([8, 9, 10])
     ID_train = np.delete(ID_all, ID_test-1)
 
     # ID_test = np.array([1])
@@ -51,10 +57,18 @@ def main(params):
     radarODE_test_set = dataset_concat(
         ID_selected=ID_test, data_root=params.dataset_path)
 
+    # Keep a small worker pool on Windows for speed while avoiding pagefile pressure.
+    data_workers = max(0, int(params.num_workers))
+    train_loader_kwargs = dict(num_workers=data_workers, pin_memory=True, drop_last=True)
+    test_loader_kwargs = dict(num_workers=data_workers, pin_memory=True, drop_last=True)
+    if data_workers > 0:
+        train_loader_kwargs.update(persistent_workers=True, prefetch_factor=2)
+        test_loader_kwargs.update(persistent_workers=True, prefetch_factor=2)
+
     trainloader = torch.utils.data.DataLoader(
-        dataset=radarODE_train_set, batch_size=params.train_bs, shuffle=True, num_workers=8, pin_memory=True, drop_last=True)
+        dataset=radarODE_train_set, batch_size=params.train_bs, shuffle=True, **train_loader_kwargs)
     testloader = torch.utils.data.DataLoader(
-        dataset=radarODE_test_set, batch_size=params.test_bs, shuffle=True, num_workers=8, pin_memory=True, drop_last=True)
+        dataset=radarODE_test_set, batch_size=params.test_bs, shuffle=True, **test_loader_kwargs)
 
     # define tasks
     task_dict = {'ECG_shape': {'metrics': ['norm_MSE', 'MSE', 'CE'],
@@ -96,8 +110,8 @@ def main(params):
 
 
     radarODE_plus_model = radarODE_plus(task_dict=task_dict,
-                          weighting=params.weighting,
-                          architecture=params.arch,
+                          weighting=getattr(weighting_method, params.weighting),
+                          architecture=getattr(architecture_method, params.arch),
                           encoder_class=encoder_class,
                           decoders=decoders,
                           rep_grad=params.rep_grad,
@@ -107,6 +121,7 @@ def main(params):
                           save_path=params.save_path,
                           load_path=params.load_path,
                           modelName=params.save_name,
+                          test_interval=params.test_interval,
                           **kwargs)
     if params.mode == 'train':
         radarODE_plus_model.train(trainloader, testloader, params.epochs)
@@ -123,9 +138,9 @@ def main(params):
                 ID_selected=ID_test, data_root=params.dataset_path)
 
             trainloader = torch.utils.data.DataLoader(
-                dataset=radarODE_train_set, batch_size=params.train_bs, shuffle=True, num_workers=8, pin_memory=True, drop_last=True)
+                dataset=radarODE_train_set, batch_size=params.train_bs, shuffle=True, **train_loader_kwargs)
             testloader = torch.utils.data.DataLoader(
-                dataset=radarODE_test_set, batch_size=params.test_bs, shuffle=True, num_workers=8, pin_memory=True, drop_last=True)
+                dataset=radarODE_test_set, batch_size=params.test_bs, shuffle=True, **test_loader_kwargs)
             radarODE_plus_model = radarODE_plus(task_dict=task_dict,
                           weighting=params.weighting,
                           architecture=params.arch,
@@ -138,6 +153,7 @@ def main(params):
                           save_path=params.save_path,
                           load_path=params.load_path,
                           modelName=params.save_name,
+                          test_interval=params.test_interval,
                           **kwargs)
             radarODE_plus_model.train(trainloader, testloader, params.epochs)
     else:
@@ -145,7 +161,7 @@ def main(params):
 
 
 if __name__ == "__main__":
-    n_epochs = 200
+    n_epochs = 15
     batch_size = 22
     learning_rate = 5e-3
     lr_scheduler = 'cos'
@@ -156,10 +172,17 @@ if __name__ == "__main__":
     T_max=100
 
     params = parse_args(LibMTL_args)
-    params.gpu_id = '6'
+    params.gpu_id = '0'
+    if not hasattr(params, 'load_path'):
+        params.load_path = None
 
-    params.dataset_path = '/home/zhangyuanyuan/Dataset/data_MMECG/data_seg_step/'
-    params.save_path = '/home/zhangyuanyuan/radarODE_plus_MTL/Model_saved/'
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+    params.dataset_path = os.path.join(BASE_DIR, 'Dataset_mix')
+    params.save_path = 'Model_saved'
 
     # set device
     set_device(params.gpu_id)
@@ -167,10 +190,11 @@ if __name__ == "__main__":
     set_random_seed(params.seed)
     params.train_bs, params.test_bs = batch_size, batch_size
     params.epochs = n_epochs
-    params.weighting = 'EGA'
-    params.EGA_temp = 1
+    params.weighting = 'EW'
     # 100 for no noise otherwise the SNR, 6,3,0,-1,-2,-3 for SNR, 101 for 1 sec extensive abrupt noise, 111 for 1 sec mild abrupt noise
     params.aug_snr = 100 
+    if os.name == 'nt':
+        params.num_workers = 0
     params.rep_grad = False
     params.multi_input = False
     params.arch = 'HPS'

@@ -123,6 +123,8 @@ def dataset_concat(ID_selected, data_root, aug_snr = 0):
     dataset = []
     for ID in ID_selected:
         ID_path = des_path_finder(ID, data_root)
+        if ID_path is None:
+            raise ValueError(f'Cannot find directory for ID {ID} under data_root={data_root}')
         dataset = ConcatDataset([dataset, SpectrumECGDataset(sst_ecg_root=ID_path, aug_snr = aug_snr)])
     return dataset
 
