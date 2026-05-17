@@ -23,7 +23,6 @@ class _PerformanceMeter(object):
         
         self.results = {task:[] for task in self.task_name}
         self.loss_item = np.zeros(self.task_num)
-        # self.metrics_item = {task:[] for task in self.task_name}
         
         self.has_val = False
         
@@ -85,7 +84,6 @@ class _PerformanceMeter(object):
             print('| ', end='')
         print('Time: {:.4f}'.format(self.end_time-self.beg_time), end='')
         print(' | ', end='') if mode!='test' else print()
-        print(' | ') if mode=='train' else print()
         
     def display_best_result(self):
         print('='*40)
