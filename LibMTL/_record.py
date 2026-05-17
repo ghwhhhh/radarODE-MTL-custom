@@ -130,11 +130,12 @@ class _PerformanceMeter(object):
 
     def _compute_primary_score(self, result):
         # Prefer clinically meaningful low-is-better metrics:
-        # ECG_shape.norm_MSE + PPI.PPI_sec
+        # ECG_shape.norm_MSE + PPI.PPI_sec + 0.2 * Anchor.MSE
         try:
             ecg_norm_mse = float(result['ECG_shape'][0])
             ppi_sec = float(result['PPI'][0])
-            return ecg_norm_mse + ppi_sec
+            anchor_mse = float(result['Anchor'][0])
+            return ecg_norm_mse + ppi_sec + 0.2 * anchor_mse
         except Exception:
             return None
         

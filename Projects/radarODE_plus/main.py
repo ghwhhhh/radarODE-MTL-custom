@@ -68,7 +68,8 @@ def main(params):
     # Keep a small worker pool on Windows for speed while avoiding pagefile pressure.
     data_workers = max(0, int(params.num_workers))
     train_loader_kwargs = dict(num_workers=data_workers, pin_memory=True, drop_last=True)
-    test_loader_kwargs = dict(num_workers=data_workers, pin_memory=True, drop_last=True)
+    # Keep all test samples and deterministic ordering for stable model selection.
+    test_loader_kwargs = dict(num_workers=data_workers, pin_memory=True, drop_last=False)
     if data_workers > 0:
         train_loader_kwargs.update(persistent_workers=True, prefetch_factor=2)
         test_loader_kwargs.update(persistent_workers=True, prefetch_factor=2)
@@ -76,7 +77,7 @@ def main(params):
     trainloader = torch.utils.data.DataLoader(
         dataset=radarODE_train_set, batch_size=params.train_bs, shuffle=True, **train_loader_kwargs)
     testloader = torch.utils.data.DataLoader(
-        dataset=radarODE_test_set, batch_size=params.test_bs, shuffle=True, **test_loader_kwargs)
+        dataset=radarODE_test_set, batch_size=params.test_bs, shuffle=False, **test_loader_kwargs)
 
     # define tasks
     task_dict = {'ECG_shape': {'metrics': ['norm_MSE', 'MSE', 'CE'],
@@ -169,14 +170,14 @@ def main(params):
 
 
 if __name__ == "__main__":
-    n_epochs = 15
+    n_epochs = 200
     batch_size = 22
     learning_rate = 5e-3
     lr_scheduler = 'cos'
     optimizer = 'sgd'
-    weight_decay=5e-4  
+    weight_decay=5e-4
     momentum=0.937
-    eta_min=learning_rate * 0.01 
+    eta_min=learning_rate * 0.01
     T_max=100
 
     params = parse_args(LibMTL_args)
