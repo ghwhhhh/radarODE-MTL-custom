@@ -46,13 +46,19 @@ def main(params):
     kwargs, optim_param, scheduler_param = prepare_args(params)
     if params.save_path is not None:
         os.makedirs(params.save_path, exist_ok=True)
-    ID_all = np.arange(1, 11)  # Use half of current subset for faster iteration
-    ID_test = np.array([8, 9, 10])
-    ID_train = np.delete(ID_all, ID_test-1)
-
-    # ID_test = np.array([1])
-    # ID_train = np.array([2])
-    print('ID_test', ID_test)
+    # 自动扫描 Dataset 目录，自动生成 ID_all 和 ID_test
+    dataset_dir = params.dataset_path
+    if not os.path.isdir(dataset_dir):
+        raise RuntimeError(f"Dataset path {dataset_dir} not found!")
+    all_dirs = [d for d in os.listdir(dataset_dir) if os.path.isdir(os.path.join(dataset_dir, d))]
+    all_dirs = sorted(all_dirs)
+    n_total = len(all_dirs)
+    ID_all = np.arange(1, n_total + 1)
+    # 测试集取最后 10%（至少 1 个）
+    n_test = max(1, int(0.1 * n_total))
+    ID_test = np.arange(n_total - n_test + 1, n_total + 1)
+    ID_train = np.setdiff1d(ID_all, ID_test)
+    print(f"ID_all: 1~{n_total}, ID_test: {ID_test.tolist()}")
 
     radarODE_train_set = dataset_concat(
         ID_selected=ID_train, data_root=params.dataset_path)
@@ -183,7 +189,7 @@ if __name__ == "__main__":
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-    params.dataset_path = os.path.join(BASE_DIR, 'Dataset_mix')
+    params.dataset_path = os.path.join(BASE_DIR, 'Dataset')
     params.save_path = 'Model_saved'
 
     # set device
