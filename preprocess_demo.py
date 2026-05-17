@@ -139,24 +139,30 @@ def process_single_record(
     for seg_idx in range(n_segs):
         s  = seg_idx * win_len
         e  = s + win_len
-        t0 = radar_time_sec[s]
-        t1 = radar_time_sec[e - 1]
+        radar_win_t = radar_time_sec[s:e].astype(float)
+        t0 = radar_win_t[0]
+        t1 = radar_win_t[-1]
         if not (np.isfinite(t0) and np.isfinite(t1) and t1 > t0):
             continue
 
-        src_t   = np.linspace(0.0, t1 - t0, num=win_len)
+        # Use real radar timestamps for resampling to avoid timing drift from uniform-grid assumptions.
+        uniq_t, uniq_idx = np.unique(radar_win_t, return_index=True)
+        if uniq_t.size < 4:
+            continue
+
         dst_len = int(desired_radar_fs * win_sec)
-        dst_t   = np.linspace(0.0, t1 - t0, num=dst_len)
+        dst_t   = np.linspace(t0, t1, num=dst_len)
 
         sst_ch = []
         for ch in range(50):
-            sig    = radar_50[s:e, ch].astype(float)
-            sig_rs = _interp_resample_1d(sig, src_t, dst_t)
+            sig = radar_50[s:e, ch].astype(float)
+            sig_rs = _interp_resample_1d(sig[uniq_idx], uniq_t, dst_t)
             tf     = _make_cwt_sst(sig_rs, scales)
             sst_ch.append(_minmax_01(tf))
         sst = np.stack(sst_ch, axis=0).astype(np.float32)
 
         mask      = (ecg_time_sec >= t0) & (ecg_time_sec <= t1)
+        ecg_win_t = ecg_time_sec[mask].astype(float)
         ecg_win   = ecg_val[mask]
 
         if len(ecg_win) < 10:
@@ -167,7 +173,10 @@ def process_single_record(
         anchor = np.zeros(800, dtype=np.float32)
         win_samples_200hz = int(win_sec * 200)
         for pk in peaks_win:
-            pk_200 = int(round(float(pk) / len(ecg_win) * win_samples_200hz))
+            pk_t = float(ecg_win_t[int(pk)])
+            phase = (pk_t - t0) / (t1 - t0)
+            pk_200 = int(round(phase * (win_samples_200hz - 1)))
+            pk_200 = max(0, pk_200)
             pk_200 = min(pk_200, 799)
             anchor[pk_200] = 1.0
 
