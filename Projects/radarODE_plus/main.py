@@ -110,8 +110,8 @@ def main(params):
 
 
     radarODE_plus_model = radarODE_plus(task_dict=task_dict,
-                          weighting=getattr(weighting_method, params.weighting),
-                          architecture=getattr(architecture_method, params.arch),
+                          weighting=params.weighting,
+                          architecture=params.arch,
                           encoder_class=encoder_class,
                           decoders=decoders,
                           rep_grad=params.rep_grad,
