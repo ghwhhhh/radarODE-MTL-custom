@@ -44,6 +44,8 @@ def parse_args(parser):
 
 def main(params):
     kwargs, optim_param, scheduler_param = prepare_args(params)
+    if params.save_path is not None:
+        os.makedirs(params.save_path, exist_ok=True)
     ID_all = np.arange(1, 11)  # Use half of current subset for faster iteration
     ID_test = np.array([8, 9, 10])
     ID_train = np.delete(ID_all, ID_test-1)
