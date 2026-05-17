@@ -1,0 +1,36 @@
+# Python 虚拟环境
+.venv*
+.venv313/
+.venv_gpu312/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# 数据目录（通过挂载 /data 方式传进容器）
+Dataset_mix/
+Dataset_mix_real/
+db_records/
+
+# 旧的模型和输出（容器运行时会重新生成）
+Model_saved/
+*.pt
+*.pth
+
+# IDE 和编辑器配置
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+.git/
+.gitignore
+*.zip
+
+# 日志和临时文件
+*.log
+*.tmp
