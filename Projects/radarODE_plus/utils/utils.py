@@ -9,10 +9,19 @@ from copy import deepcopy
 
 criterion_mse = nn.MSELoss()
 
+# Balance multi-task losses under EW (raw sum of task losses).
+# PPI CE is usually much larger in magnitude (~5.x), so we down-scale it,
+# while slightly up-scaling ECG/Anchor losses to avoid being dominated.
+SHAPE_LOSS_SCALE = 3.0
+PPI_LOSS_SCALE = 1.0
+ANCHOR_LOSS_SCALE = 3.0
+
 def normal_ecg_torch_01(ECG):
     for itr in range(ECG.size(dim=0)):
-        ECG[itr] = (ECG[itr]-torch.min(ECG[itr])) / \
-            (torch.max(ECG[itr])-torch.min(ECG[itr]))
+        ecg_min = torch.min(ECG[itr])
+        ecg_max = torch.max(ECG[itr])
+        denom = (ecg_max - ecg_min).clamp_min(1e-6)
+        ECG[itr] = (ECG[itr] - ecg_min) / denom
     return ECG
 
 def cross_entropy_loss_shape(ecg_rcon, ecg_gts):
@@ -22,17 +31,12 @@ def cross_entropy_loss_shape(ecg_rcon, ecg_gts):
     return loss(ecg_rcon, possi)
 
 def cross_entropy_loss_ppi(ecg_rcon, ecg_gts):
-    # the max/min ppi is 252/97, so we can use 155 as the range
-    # count how many -1 are there in each batch of ecg_gts
+    # Convert padded waveform labels to class indices (cycle length bins).
+    # This keeps CE numerically meaningful and aligned with argmax-based PPI error.
     ecg_rcon, ecg_gts = ecg_rcon.squeeze(1), ecg_gts.squeeze(1)
-    counts = ecg_gts.size(1)-(ecg_gts == -10).sum(dim=1)
-    batch_indices = torch.arange(ecg_gts.size(0))
-    ecg_gts = torch.zeros_like(ecg_gts)
-    ecg_gts[batch_indices, counts-1] = 1000
-    # ecg_gts[batch_indices, counts-1] = 1
-    loss = nn.CrossEntropyLoss()
-    possi = ecg_gts.softmax(dim=1)
-    return loss(ecg_rcon, possi)
+    counts = ecg_gts.size(1) - (ecg_gts == -10).sum(dim=1)
+    targets = (counts - 1).long().clamp(min=0, max=ecg_rcon.size(1) - 1)
+    return F.cross_entropy(ecg_rcon, targets)
 
 def ppi_error(ecg_rcon, ecg_gts):
     ecg_rcon, ecg_gts = ecg_rcon.squeeze(1), ecg_gts.squeeze(1)
@@ -88,7 +92,7 @@ class shapeLoss(AbsLoss):
     def compute_loss(self, pred, gt):
         gt = torch.clone(gt).detach()
         gt = normal_ecg_torch_01(gt).to(pred.device)
-        return criterion_mse(pred, gt)
+        return SHAPE_LOSS_SCALE * criterion_mse(pred, gt)
         # return r2_score(pred, gt)
 # PPI Metric
 class ppiMetric(AbsMetric):
@@ -119,7 +123,7 @@ class ppiLoss(AbsLoss):
     def __init__(self):
         super(ppiLoss, self).__init__()
     def compute_loss(self, pred, gt):
-        return cross_entropy_loss_ppi(pred, gt)
+        return PPI_LOSS_SCALE * cross_entropy_loss_ppi(pred, gt)
     
 # anchor Metric only use mse
 class anchorMetric(AbsMetric):
@@ -127,7 +131,7 @@ class anchorMetric(AbsMetric):
         super(anchorMetric, self).__init__()
     def update_fun(self, pred, gt):
         gt = torch.clone(gt).detach()
-        # gt = normal_ecg_torch_01(gt).to(pred.device)
+        gt = normal_ecg_torch_01(gt).to(pred.device)
         pred_norm = normal_ecg_torch_01(torch.clone(pred).detach())
         mse = criterion_mse(pred_norm, gt)
         self.record.append(mse.item())
@@ -139,7 +143,39 @@ class anchorMetric(AbsMetric):
 class anchorLoss(AbsLoss):
     def __init__(self):
         super(anchorLoss, self).__init__()
+        self.sigma = 3
+        self.gaussian_kernel = None
+    
+    def _create_gaussian_kernel(self, size, device):
+        if self.gaussian_kernel is None or self.gaussian_kernel.device != device or self.gaussian_kernel.shape[0] != size:
+            x = torch.arange(size, dtype=torch.float32, device=device) - (size - 1) / 2
+            kernel = torch.exp(-(x ** 2) / (2 * self.sigma ** 2))
+            kernel = kernel / kernel.sum()
+            self.gaussian_kernel = kernel
+        return self.gaussian_kernel
+    
     def compute_loss(self, pred, gt):
         gt = torch.clone(gt).detach()
         gt = normal_ecg_torch_01(gt).to(pred.device)
-        return criterion_mse(pred, gt)
+
+        # Accept both [B, L] and [B, 1, L] label layouts.
+        if gt.dim() == 2:
+            gt_1d = gt.unsqueeze(1)
+        elif gt.dim() == 3 and gt.size(1) == 1:
+            gt_1d = gt
+        elif gt.dim() == 4 and gt.size(1) == 1:
+            gt_1d = gt.squeeze(1)
+        else:
+            raise ValueError(f"Unexpected gt shape for anchorLoss: {tuple(gt.shape)}")
+        
+        kernel = self._create_gaussian_kernel(gt_1d.shape[-1], gt_1d.device)
+        gt_smooth = torch.nn.functional.conv1d(
+            gt_1d,
+            kernel.unsqueeze(0).unsqueeze(0),
+            padding=gt_1d.shape[-1] - 1
+        )[:, 0, :gt_1d.shape[-1]]
+
+        if pred.dim() == 3 and pred.size(1) == 1:
+            gt_smooth = gt_smooth.unsqueeze(1)
+        
+        return ANCHOR_LOSS_SCALE * criterion_mse(pred, gt_smooth)
