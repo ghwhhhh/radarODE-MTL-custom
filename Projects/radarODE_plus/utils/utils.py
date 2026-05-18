@@ -143,39 +143,13 @@ class anchorMetric(AbsMetric):
 class anchorLoss(AbsLoss):
     def __init__(self):
         super(anchorLoss, self).__init__()
-        self.sigma = 3
-        self.gaussian_kernel = None
-    
-    def _create_gaussian_kernel(self, size, device):
-        if self.gaussian_kernel is None or self.gaussian_kernel.device != device or self.gaussian_kernel.shape[0] != size:
-            x = torch.arange(size, dtype=torch.float32, device=device) - (size - 1) / 2
-            kernel = torch.exp(-(x ** 2) / (2 * self.sigma ** 2))
-            kernel = kernel / kernel.sum()
-            self.gaussian_kernel = kernel
-        return self.gaussian_kernel
-    
+        self.criterion = nn.BCEWithLogitsLoss()
     def compute_loss(self, pred, gt):
-        gt = torch.clone(gt).detach()
-        gt = normal_ecg_torch_01(gt).to(pred.device)
-
-        # Accept both [B, L] and [B, 1, L] label layouts.
-        if gt.dim() == 2:
-            gt_1d = gt.unsqueeze(1)
-        elif gt.dim() == 3 and gt.size(1) == 1:
-            gt_1d = gt
-        elif gt.dim() == 4 and gt.size(1) == 1:
-            gt_1d = gt.squeeze(1)
-        else:
-            raise ValueError(f"Unexpected gt shape for anchorLoss: {tuple(gt.shape)}")
-        
-        kernel = self._create_gaussian_kernel(gt_1d.shape[-1], gt_1d.device)
-        gt_smooth = torch.nn.functional.conv1d(
-            gt_1d,
-            kernel.unsqueeze(0).unsqueeze(0),
-            padding=gt_1d.shape[-1] - 1
-        )[:, 0, :gt_1d.shape[-1]]
-
-        if pred.dim() == 3 and pred.size(1) == 1:
-            gt_smooth = gt_smooth.unsqueeze(1)
-        
-        return ANCHOR_LOSS_SCALE * criterion_mse(pred, gt_smooth)
+        # pred: (B, 1, 800) or (B, 800)
+        # gt:   (B, 800) or (B, 1, 800)
+        if pred.dim() == 3:
+            pred = pred.squeeze(1)
+        if gt.dim() == 3:
+            gt = gt.squeeze(1)
+        gt = torch.clone(gt).detach().to(pred.device)
+        return ANCHOR_LOSS_SCALE * self.criterion(pred, gt)
