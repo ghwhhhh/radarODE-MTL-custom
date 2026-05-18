@@ -88,14 +88,15 @@ def _cwt_sst_segment(rcg_seg_800x50: np.ndarray, target_freq=71, target_time=120
         mag = torch.abs(coef).cpu().numpy()
         
         # Resample in time using GPU interpolation
-        mag_t = torch.from_numpy(mag).unsqueeze(0).to(device)  # (1, freq, time)
+        # F.interpolate requires (N, C, H, W) format for bilinear mode
+        mag_t = torch.from_numpy(mag)[None, None, :, :].to(device)  # (1, 1, 71, 800)
         mag_resized = F.interpolate(
             mag_t, 
             size=(target_freq, target_time), 
             mode='bilinear', 
             align_corners=False
         )
-        mag = mag_resized.squeeze(0).cpu().numpy()
+        mag = mag_resized.squeeze(0).squeeze(0).cpu().numpy()
         
         sst[ch] = _safe_norm01(mag)
     
