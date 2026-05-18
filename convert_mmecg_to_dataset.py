@@ -3,8 +3,9 @@ from pathlib import Path
 
 import numpy as np
 from scipy.io import loadmat
-from scipy.signal import find_peaks, resample
-import pywt
+from scipy.signal import find_peaks
+import torch
+import torch.nn.functional as F
 
 
 def _resolve_dir(input_path: str, must_exist: bool = True) -> Path:
@@ -61,19 +62,43 @@ def _safe_norm01(x: np.ndarray) -> np.ndarray:
     return ((x - mn) / (mx - mn)).astype(np.float32)
 
 
-def _cwt_sst_segment(rcg_seg_800x50: np.ndarray, target_freq=71, target_time=120) -> np.ndarray:
-    """Build SST-like tensor with shape (50, 71, 120) from one 4s radar segment."""
-    # pywt cwt returns (n_scales, n_time). We use 71 scales to match model input.
-    scales = np.arange(1, target_freq + 1)
+def _cwt_sst_segment(rcg_seg_800x50: np.ndarray, target_freq=71, target_time=120, device="cuda") -> np.ndarray:
+    """Build SST-like tensor with shape (50, 71, 120) from one 4s radar segment using GPU CWT."""
     sst = np.zeros((50, target_freq, target_time), dtype=np.float32)
-
+    sig_len = rcg_seg_800x50.shape[0]
+    
     for ch in range(50):
-        sig = rcg_seg_800x50[:, ch].astype(np.float32)
-        coef, _ = pywt.cwt(sig, scales=scales, wavelet="morl")
-        mag = np.abs(coef)
-        mag = resample(mag, target_time, axis=1)
+        sig = torch.from_numpy(rcg_seg_800x50[:, ch].astype(np.float32)).to(device)
+        
+        # GPU-based Morlet CWT via Fourier domain
+        sig_fft = torch.fft.rfft(sig)
+        coef = torch.zeros((target_freq, sig_len), dtype=torch.complex64, device=device)
+        
+        for scale_idx, scale in enumerate(np.arange(1, target_freq + 1)):
+            # Morlet wavelet in frequency domain (simplified)
+            freq = torch.fft.rfftfreq(sig_len, d=1.0).to(device)
+            # Morlet: exp(-(freq - fc)^2 / (2*sigma^2)) for scale
+            fc = 0.5 / scale  # center frequency
+            sigma = 0.5 / scale  # bandwidth
+            psi = torch.exp(-((freq - fc) ** 2) / (2 * sigma ** 2))
+            psi = psi / torch.sqrt(torch.sum(psi ** 2) + 1e-12)
+            coef[scale_idx] = torch.fft.irfft(sig_fft * psi, n=sig_len)
+        
+        # Magnitude and normalize
+        mag = torch.abs(coef).cpu().numpy()
+        
+        # Resample in time using GPU interpolation
+        mag_t = torch.from_numpy(mag).unsqueeze(0).to(device)  # (1, freq, time)
+        mag_resized = F.interpolate(
+            mag_t, 
+            size=(target_freq, target_time), 
+            mode='bilinear', 
+            align_corners=False
+        )
+        mag = mag_resized.squeeze(0).cpu().numpy()
+        
         sst[ch] = _safe_norm01(mag)
-
+    
     return sst
 
 
@@ -107,7 +132,7 @@ def _pick_one_cycle(ecg_800: np.ndarray, peaks: np.ndarray, max_len=260, fallbac
     return cyc.astype(np.float32)
 
 
-def convert_one_mat(mat_path: Path, out_root: Path, seg_sec: float, step_sec: float, fs: int) -> int:
+def convert_one_mat(mat_path: Path, out_root: Path, seg_sec: float, step_sec: float, fs: int, device: str) -> int:
     obj = loadmat(str(mat_path), squeeze_me=False, struct_as_record=False)
     data = obj["data"][0, 0]
 
@@ -132,7 +157,7 @@ def convert_one_mat(mat_path: Path, out_root: Path, seg_sec: float, step_sec: fl
         rcg_seg = rcg[start:end, :]  # (800, 50) for 4s@200Hz
         ecg_seg = ecg[start:end]      # (800,)
 
-        sst = _cwt_sst_segment(rcg_seg, target_freq=71, target_time=120)
+        sst = _cwt_sst_segment(rcg_seg, target_freq=71, target_time=120, device=device)
         peaks = _detect_peaks(ecg_seg, fs=fs)
 
         anchor = np.zeros((win,), dtype=np.float32)
@@ -149,14 +174,23 @@ def convert_one_mat(mat_path: Path, out_root: Path, seg_sec: float, step_sec: fl
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Convert MMECG .mat files to radarODE/radarODE-MTL Dataset format.")
+    parser = argparse.ArgumentParser(description="Convert MMECG .mat files to radarODE/radarODE-MTL Dataset format (GPU-accelerated).")
     parser.add_argument("--mat_root", type=str, required=True, help="Folder containing 1.mat..91.mat")
     parser.add_argument("--out_root", type=str, default="Dataset", help="Output Dataset root")
     parser.add_argument("--fs", type=int, default=200, help="Sampling rate of ECG/RCG in source MAT")
     parser.add_argument("--seg_sec", type=float, default=4.0, help="Segment duration in seconds")
     parser.add_argument("--step_sec", type=float, default=0.8, help="Sliding step in seconds")
     parser.add_argument("--limit", type=int, default=0, help="Only process first N mats (0 means all)")
+    parser.add_argument("--gpu_id", type=int, default=0, help="GPU device ID (0 for cuda:0, -1 for CPU)")
     args = parser.parse_args()
+
+    # Device setup
+    if args.gpu_id >= 0 and torch.cuda.is_available():
+        device = f"cuda:{args.gpu_id}"
+        print(f"Using GPU: {device} ({torch.cuda.get_device_name(args.gpu_id)})")
+    else:
+        device = "cpu"
+        print("GPU not available or disabled, using CPU")
 
     mat_root = _resolve_dir(args.mat_root, must_exist=True)
     out_root = _resolve_dir(args.out_root, must_exist=False)
@@ -180,6 +214,7 @@ def main():
             seg_sec=args.seg_sec,
             step_sec=args.step_sec,
             fs=args.fs,
+            device=device,
         )
         total_segs += n
         print(f"[{i:03d}/{len(mats):03d}] {mat_file.name}: {n} segments")
