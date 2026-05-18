@@ -1,4 +1,5 @@
 import argparse
+import os
 from pathlib import Path
 
 import numpy as np
@@ -133,6 +134,12 @@ def _pick_one_cycle(ecg_800: np.ndarray, peaks: np.ndarray, max_len=260, fallbac
     return cyc.astype(np.float32)
 
 
+def is_file_processed(out_root, file_idx):
+    """Check if the output directory for a given file index already exists."""
+    processed_dirs = list(out_root.glob(f"obj*_{file_idx}_"))
+    return len(processed_dirs) > 0
+
+
 def convert_one_mat(mat_path: Path, out_root: Path, seg_sec: float, step_sec: float, fs: int, device: str) -> int:
     obj = loadmat(str(mat_path), squeeze_me=False, struct_as_record=False)
     data = obj["data"][0, 0]
@@ -198,6 +205,7 @@ def main():
     out_root.mkdir(parents=True, exist_ok=True)
 
     mats = sorted(mat_root.glob("*.mat"), key=lambda p: int(p.stem) if p.stem.isdigit() else p.stem)
+
     if args.limit > 0:
         mats = mats[: args.limit]
 
@@ -209,6 +217,13 @@ def main():
 
     total_segs = 0
     for i, mat_file in enumerate(mats, start=1):
+        file_idx = mat_file.stem
+
+        # Skip already processed files
+        if is_file_processed(out_root, file_idx):
+            print(f"[SKIP] {mat_file.name}: Already processed.")
+            continue
+
         n = convert_one_mat(
             mat_path=mat_file,
             out_root=out_root,
