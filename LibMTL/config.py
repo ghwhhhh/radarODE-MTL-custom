@@ -174,8 +174,10 @@ def prepare_args(params):
         if params.scheduler in ['step', 'cos', 'exp']:
             if params.scheduler == 'step':
                 scheduler_param = {'scheduler': 'step', 'step_size': params.step_size, 'gamma': params.gamma}
-            if params.scheduler == 'cos':
+            elif params.scheduler == 'cos':
                 scheduler_param = {'scheduler': 'cos', 'eta_min': params.eta_min, 'T_max': params.T_max}
+            elif params.scheduler == 'exp':
+                scheduler_param = {'scheduler': 'exp', 'gamma': params.gamma}
         else:
             raise ValueError('No support scheduler method {}'.format(params.scheduler))
     else:

@@ -199,7 +199,8 @@ if __name__ == "__main__":
     set_random_seed(params.seed)
     params.train_bs, params.test_bs = batch_size, batch_size
     params.epochs = n_epochs
-    params.weighting = 'EW'
+    params.weighting = 'EGA'
+    params.EGA_temp = 1
     # 100 for no noise otherwise the SNR, 6,3,0,-1,-2,-3 for SNR, 101 for 1 sec extensive abrupt noise, 111 for 1 sec mild abrupt noise
     params.aug_snr = 100 
     if os.name == 'nt':

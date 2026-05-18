@@ -9,13 +9,6 @@ from copy import deepcopy
 
 criterion_mse = nn.MSELoss()
 
-# Balance multi-task losses under EW (raw sum of task losses).
-# PPI CE is typically one order larger than the other two losses,
-# so down-scale PPI to prevent it from dominating shared updates.
-SHAPE_LOSS_SCALE = 3.0
-PPI_LOSS_SCALE = 0.04
-ANCHOR_LOSS_SCALE = 4.0
-
 def normal_ecg_torch_01(ECG):
     for itr in range(ECG.size(dim=0)):
         ecg_min = torch.min(ECG[itr])
@@ -92,7 +85,7 @@ class shapeLoss(AbsLoss):
     def compute_loss(self, pred, gt):
         gt = torch.clone(gt).detach()
         gt = normal_ecg_torch_01(gt).to(pred.device)
-        return SHAPE_LOSS_SCALE * criterion_mse(pred, gt)
+        return criterion_mse(pred, gt)
         # return r2_score(pred, gt)
 # PPI Metric
 class ppiMetric(AbsMetric):
@@ -123,7 +116,7 @@ class ppiLoss(AbsLoss):
     def __init__(self):
         super(ppiLoss, self).__init__()
     def compute_loss(self, pred, gt):
-        return PPI_LOSS_SCALE * cross_entropy_loss_ppi(pred, gt)
+        return cross_entropy_loss_ppi(pred, gt)
     
 # anchor Metric only use mse
 class anchorMetric(AbsMetric):
@@ -152,4 +145,4 @@ class anchorLoss(AbsLoss):
         if gt.dim() == 3:
             gt = gt.squeeze(1)
         gt = torch.clone(gt).detach().to(pred.device)
-        return ANCHOR_LOSS_SCALE * self.criterion(pred, gt)
+        return self.criterion(pred, gt)
