@@ -180,7 +180,7 @@ def main():
     parser.add_argument("--out_root", type=str, default="Dataset", help="Output Dataset root")
     parser.add_argument("--fs", type=int, default=200, help="Sampling rate of ECG/RCG in source MAT")
     parser.add_argument("--seg_sec", type=float, default=4.0, help="Segment duration in seconds")
-    parser.add_argument("--step_sec", type=float, default=0.8, help="Sliding step in seconds")
+    parser.add_argument("--step_sec", type=float, default=4.0, help="Sliding step in seconds")
     parser.add_argument("--limit", type=int, default=0, help="Only process first N mats (0 means all)")
     parser.add_argument("--gpu_id", type=int, default=0, help="GPU device ID (0 for cuda:0, -1 for CPU)")
     args = parser.parse_args()
