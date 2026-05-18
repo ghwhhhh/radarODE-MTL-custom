@@ -10,11 +10,11 @@ from copy import deepcopy
 criterion_mse = nn.MSELoss()
 
 # Balance multi-task losses under EW (raw sum of task losses).
-# PPI CE is usually much larger in magnitude (~5.x), so we down-scale it,
-# while slightly up-scaling ECG/Anchor losses to avoid being dominated.
+# PPI CE is typically one order larger than the other two losses,
+# so down-scale PPI to prevent it from dominating shared updates.
 SHAPE_LOSS_SCALE = 3.0
-PPI_LOSS_SCALE = 1.0
-ANCHOR_LOSS_SCALE = 3.0
+PPI_LOSS_SCALE = 0.04
+ANCHOR_LOSS_SCALE = 4.0
 
 def normal_ecg_torch_01(ECG):
     for itr in range(ECG.size(dim=0)):
