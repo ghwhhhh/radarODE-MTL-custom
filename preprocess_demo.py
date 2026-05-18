@@ -209,7 +209,12 @@ def process_all(
     desired_radar_fs=30,
     max_segments_per_session=None,
     range_bin_start=7,
+    include_postures=None,
 ):
+    include_postures_lc = None
+    if include_postures:
+        include_postures_lc = {p.strip().lower() for p in include_postures if p and p.strip()}
+
     sessions = []
     for pdir in sorted(os.listdir(db_root)):
         ppath = os.path.join(db_root, pdir)
@@ -218,6 +223,8 @@ def process_all(
         for posture in sorted(os.listdir(ppath)):
             pospath = os.path.join(ppath, posture)
             if not os.path.isdir(pospath):
+                continue
+            if include_postures_lc is not None and posture.lower() not in include_postures_lc:
                 continue
             for activity in sorted(os.listdir(pospath)):
                 actpath = os.path.join(pospath, activity)
@@ -255,11 +262,18 @@ def _parse_args():
     p.add_argument('--desired_radar_fs', type=int,  default=30)
     p.add_argument('--max_segments',     type=int,  default=None)
     p.add_argument('--range_bin_start',  type=int,  default=7)
+    p.add_argument(
+        '--include_postures',
+        type=str,
+        default='',
+        help='Batch mode only. Comma-separated posture names to keep, e.g. "Sitting" or "Sitting,Standing". Empty means all postures.',
+    )
     return p.parse_args()
 
 
 if __name__ == '__main__':
     args = _parse_args()
+    include_postures = [x.strip() for x in args.include_postures.split(',') if x.strip()]
     if args.mode == 'batch':
         process_all(
             db_root=args.db_root,
@@ -268,6 +282,7 @@ if __name__ == '__main__':
             desired_radar_fs=args.desired_radar_fs,
             max_segments_per_session=args.max_segments,
             range_bin_start=args.range_bin_start,
+            include_postures=include_postures,
         )
     else:
         process_single_record(
