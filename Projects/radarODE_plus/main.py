@@ -172,11 +172,11 @@ def main(params):
 if __name__ == "__main__":
     n_epochs = 200
     batch_size = 22
-    learning_rate = 5e-3
+    learning_rate = 1e-4  # Updated to match reference repository
     lr_scheduler = 'cos'
     optimizer = 'sgd'
-    weight_decay=5e-4
-    momentum=0.937
+    weight_decay=1e-5  # Updated to match reference repository
+    momentum=0.9  # Updated to match reference repository
     eta_min=learning_rate * 0.01
     T_max=100
 
