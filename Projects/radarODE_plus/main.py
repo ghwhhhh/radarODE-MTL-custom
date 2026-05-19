@@ -35,6 +35,8 @@ def parse_args(parser):
     parser.add_argument('--select_sample', default=False,
                         type=bool, help='select sample')
     parser.add_argument('--aug_snr', default=100, type=int, help='100 for no aug otherwise the SNR')
+    parser.add_argument('--anchor_loss_weight', default=50.0, type=float,
+                        help='scale factor for Anchor task loss')
     return parser.parse_args()
 
 
@@ -121,7 +123,7 @@ def main(params):
                          'weight': [0, 0]},
                  'Anchor': {'metrics': ['MSE'],
                             'metrics_fn': anchorMetric(),
-                            'loss_fn': anchorLoss(),
+                            'loss_fn': anchorLoss(loss_weight=params.anchor_loss_weight),
                             'weight': [0]}}
     
     # # define backbone and en/decoders

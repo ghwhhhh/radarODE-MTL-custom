@@ -136,9 +136,10 @@ class anchorMetric(AbsMetric):
         batch_size = np.array(self.bs)
         return [(records*batch_size).sum()/(sum(batch_size))]
 class anchorLoss(AbsLoss):
-    def __init__(self):
+    def __init__(self, loss_weight=5.0):
         super(anchorLoss, self).__init__()
+        self.loss_weight = float(loss_weight)
     def compute_loss(self, pred, gt):
         gt = torch.clone(gt).detach()
         gt = normal_ecg_torch_01(gt).to(pred.device)
-        return criterion_mse(pred, gt)
+        return self.loss_weight * criterion_mse(pred, gt)
