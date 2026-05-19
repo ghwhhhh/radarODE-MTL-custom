@@ -15,7 +15,7 @@ class _PerformanceMeter(object):
         
         self.weight = {task: self.task_dict[task]['weight'] for task in self.task_name}
         self.base_result = base_result
-        self.best_result = {'improvement': -1e+2, 'primary_score': float('inf'), 'epoch': 0, 'result': 0}
+        self.best_result = {'improvement': -1e+2, 'epoch': 0, 'result': 0}
         self.improvement = None
         
         self.losses = {task: self.task_dict[task]['loss_fn'] for task in self.task_name}
@@ -94,50 +94,22 @@ class _PerformanceMeter(object):
         
     def _update_best_result_by_val(self, new_result, epoch, mode):
         if mode == 'val':
-            primary_score = self._compute_primary_score(new_result)
-            if primary_score is not None:
-                self.improvement = -primary_score
-                if primary_score < self.best_result['primary_score']:
-                    self.best_result['primary_score'] = primary_score
-                    self.best_result['improvement'] = -primary_score
-                    self.best_result['epoch'] = epoch
-            else:
-                improvement = count_improvement(self.base_result, new_result, self.weight)
-                self.improvement = improvement
-                if improvement > self.best_result['improvement']:
-                    self.best_result['improvement'] = improvement
-                    self.best_result['epoch'] = epoch
-        else:
-            if epoch == self.best_result['epoch']:
-                self.best_result['result'] = new_result
-        
-    def _update_best_result(self, new_result, epoch):
-        primary_score = self._compute_primary_score(new_result)
-        if primary_score is not None:
-            self.improvement = -primary_score
-            if primary_score < self.best_result['primary_score']:
-                self.best_result['primary_score'] = primary_score
-                self.best_result['improvement'] = -primary_score
-                self.best_result['epoch'] = epoch
-                self.best_result['result'] = new_result
-        else:
             improvement = count_improvement(self.base_result, new_result, self.weight)
             self.improvement = improvement
             if improvement > self.best_result['improvement']:
                 self.best_result['improvement'] = improvement
                 self.best_result['epoch'] = epoch
+        else:
+            if epoch == self.best_result['epoch']:
                 self.best_result['result'] = new_result
-
-    def _compute_primary_score(self, result):
-        # Prefer clinically meaningful low-is-better metrics:
-        # ECG_shape.norm_MSE + PPI.PPI_sec + 0.2 * Anchor.MSE
-        try:
-            ecg_norm_mse = float(result['ECG_shape'][0])
-            ppi_sec = float(result['PPI'][0])
-            anchor_mse = float(result['Anchor'][0])
-            return ecg_norm_mse + ppi_sec + 0.2 * anchor_mse
-        except Exception:
-            return None
+        
+    def _update_best_result(self, new_result, epoch):
+        improvement = count_improvement(self.base_result, new_result, self.weight)
+        self.improvement = improvement
+        if improvement > self.best_result['improvement']:
+            self.best_result['improvement'] = improvement
+            self.best_result['epoch'] = epoch
+            self.best_result['result'] = new_result
         
     def reinit(self):
         for task in self.task_name:

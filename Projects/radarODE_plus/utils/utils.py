@@ -11,10 +11,8 @@ criterion_mse = nn.MSELoss()
 
 def normal_ecg_torch_01(ECG):
     for itr in range(ECG.size(dim=0)):
-        ecg_min = torch.min(ECG[itr])
-        ecg_max = torch.max(ECG[itr])
-        denom = (ecg_max - ecg_min).clamp_min(1e-6)
-        ECG[itr] = (ECG[itr] - ecg_min) / denom
+        ECG[itr] = (ECG[itr]-torch.min(ECG[itr])) / \
+            (torch.max(ECG[itr])-torch.min(ECG[itr]))
     return ECG
 
 def cross_entropy_loss_shape(ecg_rcon, ecg_gts):
@@ -24,17 +22,21 @@ def cross_entropy_loss_shape(ecg_rcon, ecg_gts):
     return loss(ecg_rcon, possi)
 
 def cross_entropy_loss_ppi(ecg_rcon, ecg_gts):
-    # Convert padded waveform labels to class indices (cycle length bins).
-    # This keeps CE numerically meaningful and aligned with argmax-based PPI error.
+    # the max/min ppi is 252/97, so we can use 155 as the range
+    # count how many -1 are there in each batch of ecg_gts
     ecg_rcon, ecg_gts = ecg_rcon.squeeze(1), ecg_gts.squeeze(1)
-    counts = ecg_gts.size(1) - (ecg_gts == -10).sum(dim=1)
-    targets = (counts - 1).long().clamp(min=0, max=ecg_rcon.size(1) - 1)
-    return F.cross_entropy(ecg_rcon, targets)
+    counts = ecg_gts.size(1)-(ecg_gts == -10).sum(dim=1)
+    batch_indices = torch.arange(ecg_gts.size(0))
+    ecg_gts = torch.zeros_like(ecg_gts)
+    ecg_gts[batch_indices, counts-1] = 1000
+    # ecg_gts[batch_indices, counts-1] = 1
+    loss = nn.CrossEntropyLoss()
+    possi = ecg_gts.softmax(dim=1)
+    return loss(ecg_rcon, possi)
 
 def ppi_error(ecg_rcon, ecg_gts):
     ecg_rcon, ecg_gts = ecg_rcon.squeeze(1), ecg_gts.squeeze(1)
     counts = ecg_gts.size(1)-(ecg_gts == -10).sum(dim=1)+1  # ppi_gts
-    batch_indices = torch.arange(ecg_gts.size(0))
     ppi_pred = ecg_rcon.argmax(dim=1)
     return torch.mean(torch.abs(ppi_pred - counts)/200)
 
@@ -124,7 +126,7 @@ class anchorMetric(AbsMetric):
         super(anchorMetric, self).__init__()
     def update_fun(self, pred, gt):
         gt = torch.clone(gt).detach()
-        gt = normal_ecg_torch_01(gt).to(pred.device)
+        # gt = normal_ecg_torch_01(gt).to(pred.device)
         pred_norm = normal_ecg_torch_01(torch.clone(pred).detach())
         mse = criterion_mse(pred_norm, gt)
         self.record.append(mse.item())
@@ -136,13 +138,7 @@ class anchorMetric(AbsMetric):
 class anchorLoss(AbsLoss):
     def __init__(self):
         super(anchorLoss, self).__init__()
-        self.criterion = nn.BCEWithLogitsLoss()
     def compute_loss(self, pred, gt):
-        # pred: (B, 1, 800) or (B, 800)
-        # gt:   (B, 800) or (B, 1, 800)
-        if pred.dim() == 3:
-            pred = pred.squeeze(1)
-        if gt.dim() == 3:
-            gt = gt.squeeze(1)
-        gt = torch.clone(gt).detach().to(pred.device)
-        return self.criterion(pred, gt)
+        gt = torch.clone(gt).detach()
+        gt = normal_ecg_torch_01(gt).to(pred.device)
+        return criterion_mse(pred, gt)

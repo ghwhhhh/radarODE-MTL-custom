@@ -1,4 +1,4 @@
-import torch, os, sys
+import torch, os, re, sys
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -13,7 +13,7 @@ import LibMTL.weighting as weighting_method
 import LibMTL.architecture as architecture_method
 from Projects.radarODE_plus.utils.utils import shapeMetric, shapeLoss, ppiMetric, ppiLoss, anchorMetric, anchorLoss
 
-from Projects.radarODE_plus.spectrum_dataset import dataset_concat
+from Projects.radarODE_plus.spectrum_dataset import dataset_concat, SpectrumECGDataset
 from Projects.radarODE_plus.nets.PPI_decoder import PPI_decoder
 from Projects.radarODE_plus.nets.anchor_decoder import anchor_decoder
 from Projects.radarODE_plus.nets.model import backbone, shapeDecoder
@@ -35,49 +35,80 @@ def parse_args(parser):
     parser.add_argument('--select_sample', default=False,
                         type=bool, help='select sample')
     parser.add_argument('--aug_snr', default=100, type=int, help='100 for no aug otherwise the SNR')
-    parser.add_argument('--num_workers', default=0 if os.name == 'nt' else 8, type=int,
-                        help='dataloader worker count')
-    parser.add_argument('--test_interval', default=1, type=int,
-                        help='run test every N epochs')
     return parser.parse_args()
+
+
+def _discover_available_ids(dataset_dir):
+    """Parse available sample IDs from folder names like obj1_NB_1_."""
+    all_ids = []
+    for name in os.listdir(dataset_dir):
+        full_path = os.path.join(dataset_dir, name)
+        if not os.path.isdir(full_path):
+            continue
+        nums = re.findall(r'\d+', name)
+        if len(nums) == 0:
+            continue
+        all_ids.append(int(nums[-1]))
+    if len(all_ids) == 0:
+        return np.array([], dtype=int)
+    return np.array(sorted(set(all_ids)), dtype=int)
 
 
 def main(params):
     kwargs, optim_param, scheduler_param = prepare_args(params)
     if params.save_path is not None:
         os.makedirs(params.save_path, exist_ok=True)
-    # 自动扫描 Dataset 目录，自动生成 ID_all 和 ID_test
     dataset_dir = params.dataset_path
     if not os.path.isdir(dataset_dir):
-        raise RuntimeError(f"Dataset path {dataset_dir} not found!")
-    all_dirs = [d for d in os.listdir(dataset_dir) if os.path.isdir(os.path.join(dataset_dir, d))]
-    all_dirs = sorted(all_dirs)
-    n_total = len(all_dirs)
-    ID_all = np.arange(1, n_total + 1)
-    # 测试集取最后 10%（至少 1 个）
-    n_test = max(1, int(0.1 * n_total))
-    ID_test = np.arange(n_total - n_test + 1, n_total + 1)
-    ID_train = np.setdiff1d(ID_all, ID_test)
-    print(f"ID_all: 1~{n_total}, ID_test: {ID_test.tolist()}")
+        raise RuntimeError(f"Dataset path not found: {dataset_dir}")
 
-    radarODE_train_set = dataset_concat(
-        ID_selected=ID_train, data_root=params.dataset_path)
-    radarODE_test_set = dataset_concat(
-        ID_selected=ID_test, data_root=params.dataset_path)
+    # Support directly passing one sample folder, e.g., Dataset/obj1_NB_1_.
+    has_flat_segments = len([f for f in os.listdir(dataset_dir) if f.startswith('sst_seg_') and f.endswith('.npy')]) > 0
+    if has_flat_segments:
+        full_dataset = SpectrumECGDataset(sst_ecg_root=dataset_dir, aug_snr=params.aug_snr)
+        n_total = len(full_dataset)
+        if n_total < 2:
+            raise RuntimeError(f"Need at least 2 segments for train/test split, got {n_total} in {dataset_dir}")
+        n_test = max(1, int(0.1 * n_total))
+        n_train = n_total - n_test
+        if n_train == 0:
+            n_train = 1
+            n_test = n_total - 1
+        split_gen = torch.Generator().manual_seed(params.seed)
+        radarODE_train_set, radarODE_test_set = torch.utils.data.random_split(
+            full_dataset, [n_train, n_test], generator=split_gen)
+        print(f"Single-folder mode: total={n_total}, train={n_train}, test={n_test}")
+    else:
+        # Dataset root mode: subfolders like obj1_NB_1_, obj30_PE_91_, etc.
+        ID_all = _discover_available_ids(dataset_dir)
+        if ID_all.size == 0:
+            raise RuntimeError(
+                f"No valid sample subfolders found under {dataset_dir}. "
+                "Expected folder names like obj1_NB_1_."
+            )
 
-    # Keep a small worker pool on Windows for speed while avoiding pagefile pressure.
-    data_workers = max(0, int(params.num_workers))
-    train_loader_kwargs = dict(num_workers=data_workers, pin_memory=True, drop_last=True)
-    # Keep all test samples and deterministic ordering for stable model selection.
-    test_loader_kwargs = dict(num_workers=data_workers, pin_memory=True, drop_last=False)
-    if data_workers > 0:
-        train_loader_kwargs.update(persistent_workers=True, prefetch_factor=2)
-        test_loader_kwargs.update(persistent_workers=True, prefetch_factor=2)
+        preferred_test = np.array([75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85], dtype=int)
+        ID_test = np.intersect1d(preferred_test, ID_all)
+        if ID_test.size == 0:
+            n_test = max(1, int(0.1 * ID_all.size))
+            ID_test = ID_all[-n_test:]
+        ID_train = np.setdiff1d(ID_all, ID_test)
+        if ID_train.size == 0:
+            raise RuntimeError("No training IDs left after split. Please check dataset organization.")
+
+        print('ID_all', ID_all)
+        print('ID_test', ID_test)
+        radarODE_train_set = dataset_concat(
+            ID_selected=ID_train, data_root=params.dataset_path, aug_snr=params.aug_snr)
+        radarODE_test_set = dataset_concat(
+            ID_selected=ID_test, data_root=params.dataset_path, aug_snr=100)
 
     trainloader = torch.utils.data.DataLoader(
-        dataset=radarODE_train_set, batch_size=params.train_bs, shuffle=True, **train_loader_kwargs)
+        dataset=radarODE_train_set, batch_size=params.train_bs, shuffle=True,
+        num_workers=0 if os.name == 'nt' else 8, pin_memory=True, drop_last=True)
     testloader = torch.utils.data.DataLoader(
-        dataset=radarODE_test_set, batch_size=params.test_bs, shuffle=False, **test_loader_kwargs)
+        dataset=radarODE_test_set, batch_size=params.test_bs, shuffle=True,
+        num_workers=0 if os.name == 'nt' else 8, pin_memory=True, drop_last=True)
 
     # define tasks
     task_dict = {'ECG_shape': {'metrics': ['norm_MSE', 'MSE', 'CE'],
@@ -130,7 +161,6 @@ def main(params):
                           save_path=params.save_path,
                           load_path=params.load_path,
                           modelName=params.save_name,
-                          test_interval=params.test_interval,
                           **kwargs)
     if params.mode == 'train':
         radarODE_plus_model.train(trainloader, testloader, params.epochs)
@@ -147,9 +177,11 @@ def main(params):
                 ID_selected=ID_test, data_root=params.dataset_path)
 
             trainloader = torch.utils.data.DataLoader(
-                dataset=radarODE_train_set, batch_size=params.train_bs, shuffle=True, **train_loader_kwargs)
+                dataset=radarODE_train_set, batch_size=params.train_bs, shuffle=True,
+                num_workers=0 if os.name == 'nt' else 8, pin_memory=True, drop_last=True)
             testloader = torch.utils.data.DataLoader(
-                dataset=radarODE_test_set, batch_size=params.test_bs, shuffle=True, **test_loader_kwargs)
+                dataset=radarODE_test_set, batch_size=params.test_bs, shuffle=True,
+                num_workers=0 if os.name == 'nt' else 8, pin_memory=True, drop_last=True)
             radarODE_plus_model = radarODE_plus(task_dict=task_dict,
                           weighting=params.weighting,
                           architecture=params.arch,
@@ -162,7 +194,6 @@ def main(params):
                           save_path=params.save_path,
                           load_path=params.load_path,
                           modelName=params.save_name,
-                          test_interval=params.test_interval,
                           **kwargs)
             radarODE_plus_model.train(trainloader, testloader, params.epochs)
     else:
@@ -172,13 +203,13 @@ def main(params):
 if __name__ == "__main__":
     n_epochs = 200
     batch_size = 22
-    learning_rate = 1e-4  # Updated to match reference repository
+    learning_rate = 5e-3
     lr_scheduler = 'cos'
     optimizer = 'sgd'
-    weight_decay=1e-5  # Updated to match reference repository
-    momentum=0.9  # Updated to match reference repository
-    eta_min=learning_rate * 0.01
-    T_max=100
+    weight_decay = 5e-4
+    momentum = 0.937
+    eta_min = learning_rate * 0.01
+    T_max = 100
 
     params = parse_args(LibMTL_args)
     params.gpu_id = '0'
@@ -203,8 +234,6 @@ if __name__ == "__main__":
     params.EGA_temp = 1
     # 100 for no noise otherwise the SNR, 6,3,0,-1,-2,-3 for SNR, 101 for 1 sec extensive abrupt noise, 111 for 1 sec mild abrupt noise
     params.aug_snr = 100 
-    if os.name == 'nt':
-        params.num_workers = 0
     params.rep_grad = False
     params.multi_input = False
     params.arch = 'HPS'
